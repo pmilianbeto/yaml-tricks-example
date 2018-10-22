@@ -1,0 +1,116 @@
+---
+slack_failure_notification: &slack_failure_notification
+  put: slack
+  params:
+    icon_emoji: ':boom:'
+    silent: true
+    attachments: |
+      [{
+        "text": "FAILED: <$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|$BUILD_PIPELINE_NAME/$BUILD_JOB_NAME>",
+        "color": "danger"
+      }]
+
+backend-artifact-aws-key: &backend-artifact-aws-key
+  access_key_id: ((backend-artifact-aws-key-id)) # stored in the vault
+  secret_access_key: ((backend-artifact-aws-access-key))
+
+terraform_aws_envs: &terraform_aws_envs
+  AWS_ACCESS_KEY_ID: ((terraform-aws-key-id)) # stored in the vault
+  AWS_SECRET_ACCESS_KEY: ((terraform-aws-access-key))
+
+resource_types:
+
+  - name: slack-notification
+    type: docker-image
+    source:
+      repository: cfcommunity/slack-notification-resource
+      tag: latest
+
+resources:
+  - name: backend-src
+    type: git
+    source:
+      "<<": [ ((backend.git)), {
+          private_key: ((backend-git-private-key)) # stored in the vault
+        }]
+
+  - name: terraform-src
+    type: git
+    source:
+      "<<": [ ((terraform.git)), {
+          private_key: ((terraform-git-private-key)) # stored in the vault
+        }]
+
+  - name: backend-artifact
+    type: s3
+    source:
+      "<<": [ ((backend.artifact.s3)), *backend-artifact-aws-key ]
+
+  - name: slack
+    type: slack-notification
+    source:
+      url: ((slack-webhook-url))
+
+jobs:
+
+  - name: backend-build
+    plan:
+      - aggregate:
+        - get: src
+          resource: backend-src
+          trigger: true
+      - task: build
+        file: src/tasks/build.yml
+      - put: backend-artifact
+        params:
+          file: build/backend-*.tgz
+    on_failure: *slack_failure_notification
+
+  - name: terraform-backend-dev
+    plan:
+      - aggregate:
+        - get: artifact # you can rename a resource to match a task's input this way
+          resource: backend-artifact
+          trigger: true
+        - get: terraform-src
+          trigger: false
+      - task: terraform-backend-dev
+        file: terraform-src/ci/tasks/terraform-backend.yml
+        params:
+          TERRAFORM_WORKSPACE: dev
+          TERRAFORM_APPLY: true
+          <<: *terraform_aws_envs
+        on_failure: *slack_failure_notification
+
+  - name: terraform-backend-demo
+    plan:
+      - aggregate:
+        - get: artifact
+          resource: backend-artifact
+          passed: [terraform-backend-dev]
+        - get: terraform-src
+          passed: [terraform-backend-dev]
+      - task: terraform-backend-demo
+        file: terraform-src/ci/tasks/terraform-backend.yml
+        params:
+          TERRAFORM_WORKSPACE: demo
+          TERRAFORM_APPLY: true
+          <<: *terraform_aws_envs
+        on_failure: *slack_failure_notification
+
+  - name: terraform-backend-prod
+    plan:
+      - aggregate:
+        - get: artifact
+          resource: backend-artifact
+          passed: [terraform-backend-demo]
+        - get: terraform-src
+          passed: [terraform-backend-demo]
+      - task: terraform-backend-prod
+        file: terraform-src/ci/tasks/terraform-backend.yml
+        params:
+          TERRAFORM_WORKSPACE: prod
+          TERRAFORM_APPLY: true
+          <<: *terraform_aws_envs
+        on_failure: *slack_failure_notification
+

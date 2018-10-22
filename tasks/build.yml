@@ -1,0 +1,16 @@
+---
+platform: linux
+
+image_resource:
+  type: docker-image
+  source: { repository: node, tag: 10.11.0-jessie }
+
+inputs:
+  - name: src
+
+outputs:
+  - name: build
+
+run:
+  path: src/tasks/build.sh
+
