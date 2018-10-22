@@ -1,0 +1,1 @@
+This repository shows an exemple of how to reduce some boilerplate in a concourse pipeline.
